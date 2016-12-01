@@ -1,0 +1,226 @@
+From b4d03dc82f6d282582dda2137fadd54f97d3b9a7 Mon Sep 17 00:00:00 2001
+From: Yoann Lopes <yoann.lopes@theqtcompany.com>
+Date: Wed, 25 Nov 2015 16:27:08 +0100
+Subject: [PATCH] GStreamer: fix GstAppSrc usage.
+
+Allow our GstAppSrc wrapper to be reconfigured with a new GstAppSrc
+object. This is necessary because that object changes every time
+playback is restarted, even for the same source. The consequence of
+not allowing the reconfigure was that playback for a given qrc media
+would only work the first time; any subsequent calls to play() would
+not work since our wrapper wouldn't know about the new GstAppSrc object
+and therefore wouldn't be able to produce any data.
+
+Also improved management of the wrapper lifecycle.
+
+Task-number: QTBUG-49531
+Change-Id: I905afb6848cc7e9a563b4edc2c5875cdd7e53d21
+Reviewed-by: Christian Stromme <christian.stromme@theqtcompany.com>
+---
+ src/gsttools/qgstappsrc.cpp                        | 39 +++++++++++++---------
+ src/multimedia/gsttools_headers/qgstappsrc_p.h     |  2 --
+ .../audiodecoder/qgstreameraudiodecodersession.cpp |  8 ++---
+ .../mediaplayer/qgstreamerplayersession.cpp        | 19 ++++++++---
+ 4 files changed, 39 insertions(+), 29 deletions(-)
+
+diff --git a/src/gsttools/qgstappsrc.cpp b/src/gsttools/qgstappsrc.cpp
+index 66c3849..c2b2fae 100644
+--- a/src/gsttools/qgstappsrc.cpp
++++ b/src/gsttools/qgstappsrc.cpp
+@@ -41,7 +41,6 @@ QGstAppSrc::QGstAppSrc(QObject *parent)
+     ,m_appSrc(0)
+     ,m_sequential(false)
+     ,m_maxBytes(0)
+-    ,m_setup(false)
+     ,m_dataRequestSize(~0)
+     ,m_dataRequested(false)
+     ,m_enoughData(false)
+@@ -60,11 +59,13 @@ QGstAppSrc::~QGstAppSrc()
+ 
+ bool QGstAppSrc::setup(GstElement* appsrc)
+ {
+-    if (m_setup || m_stream == 0 || appsrc == 0)
+-        return false;
+-
+-    if (m_appSrc)
++    if (m_appSrc) {
+         gst_object_unref(G_OBJECT(m_appSrc));
++        m_appSrc = 0;
++    }
++
++    if (!appsrc || !m_stream)
++        return false;
+ 
+     m_appSrc = GST_APP_SRC(appsrc);
+     gst_object_ref(G_OBJECT(m_appSrc));
+@@ -79,32 +80,35 @@ bool QGstAppSrc::setup(GstElement* appsrc)
+     gst_app_src_set_stream_type(m_appSrc, m_streamType);
+     gst_app_src_set_size(m_appSrc, (m_sequential) ? -1 : m_stream->size());
+ 
+-    return  m_setup = true;
++    return true;
+ }
+ 
+ void QGstAppSrc::setStream(QIODevice *stream)
+ {
+-    if (stream == 0)
+-        return;
+     if (m_stream) {
+         disconnect(m_stream, SIGNAL(readyRead()), this, SLOT(onDataReady()));
+         disconnect(m_stream, SIGNAL(destroyed()), this, SLOT(streamDestroyed()));
++        m_stream = 0;
+     }
+-    if (m_appSrc)
++
++    if (m_appSrc) {
+         gst_object_unref(G_OBJECT(m_appSrc));
++        m_appSrc = 0;
++    }
+ 
+     m_dataRequestSize = ~0;
+     m_dataRequested = false;
+     m_enoughData = false;
+     m_forceData = false;
++    m_sequential = false;
+     m_maxBytes = 0;
+ 
+-    m_appSrc = 0;
+-    m_stream = stream;
+-    connect(m_stream, SIGNAL(destroyed()), SLOT(streamDestroyed()));
+-    connect(m_stream, SIGNAL(readyRead()), this, SLOT(onDataReady()));
+-    m_sequential = m_stream->isSequential();
+-    m_setup = false;
++    if (stream) {
++        m_stream = stream;
++        connect(m_stream, SIGNAL(destroyed()), SLOT(streamDestroyed()));
++        connect(m_stream, SIGNAL(readyRead()), this, SLOT(onDataReady()));
++        m_sequential = m_stream->isSequential();
++    }
+ }
+ 
+ QIODevice *QGstAppSrc::stream() const
+@@ -135,7 +139,7 @@ void QGstAppSrc::streamDestroyed()
+ 
+ void QGstAppSrc::pushDataToAppSrc()
+ {
+-    if (!isStreamValid() || !m_setup)
++    if (!isStreamValid() || !m_appSrc)
+         return;
+ 
+     if (m_dataRequested && !m_enoughData) {
+@@ -242,6 +246,9 @@ void QGstAppSrc::destroy_notify(gpointer data)
+ 
+ void QGstAppSrc::sendEOS()
+ {
++    if (!m_appSrc)
++        return;
++
+     gst_app_src_end_of_stream(GST_APP_SRC(m_appSrc));
+     if (isStreamValid() && !stream()->isSequential())
+         stream()->reset();
+diff --git a/src/multimedia/gsttools_headers/qgstappsrc_p.h b/src/multimedia/gsttools_headers/qgstappsrc_p.h
+index ec54af0..c5f94ea 100644
+--- a/src/multimedia/gsttools_headers/qgstappsrc_p.h
++++ b/src/multimedia/gsttools_headers/qgstappsrc_p.h
+@@ -54,7 +54,6 @@ public:
+     ~QGstAppSrc();
+ 
+     bool setup(GstElement *);
+-    bool isReady() const { return m_setup; }
+ 
+     void setStream(QIODevice *);
+     QIODevice *stream() const;
+@@ -93,7 +92,6 @@ private:
+     GstAppStreamType m_streamType;
+     GstAppSrcCallbacks m_callbacks;
+     qint64 m_maxBytes;
+-    bool m_setup;
+     unsigned int m_dataRequestSize;
+     bool m_dataRequested;
+     bool m_enoughData;
+diff --git a/src/plugins/gstreamer/audiodecoder/qgstreameraudiodecodersession.cpp b/src/plugins/gstreamer/audiodecoder/qgstreameraudiodecodersession.cpp
+index efa8dcb..3360583 100644
+--- a/src/plugins/gstreamer/audiodecoder/qgstreameraudiodecodersession.cpp
++++ b/src/plugins/gstreamer/audiodecoder/qgstreameraudiodecodersession.cpp
+@@ -142,9 +142,6 @@ void QGstreamerAudioDecoderSession::configureAppSrcElement(GObject* object, GObj
+     if (!self->appsrc())
+         return;
+ 
+-    if (self->appsrc()->isReady())
+-        return;
+-
+     GstElement *appsrc;
+     g_object_get(orig, "source", &appsrc, NULL);
+ 
+@@ -350,9 +347,8 @@ void QGstreamerAudioDecoderSession::start()
+             return;
+         }
+ 
+-        if (m_appSrc)
+-            m_appSrc->deleteLater();
+-        m_appSrc = new QGstAppSrc(this);
++        if (!m_appSrc)
++            m_appSrc = new QGstAppSrc(this);
+         m_appSrc->setStream(mDevice);
+ 
+         g_object_set(G_OBJECT(m_playbin), "uri", "appsrc://", NULL);
+diff --git a/src/plugins/gstreamer/mediaplayer/qgstreamerplayersession.cpp b/src/plugins/gstreamer/mediaplayer/qgstreamerplayersession.cpp
+index c3d20e7..a1eee01 100644
+--- a/src/plugins/gstreamer/mediaplayer/qgstreamerplayersession.cpp
++++ b/src/plugins/gstreamer/mediaplayer/qgstreamerplayersession.cpp
+@@ -241,6 +241,10 @@ QGstreamerPlayerSession::QGstreamerPlayerSession(QObject *parent)
+         g_signal_connect(G_OBJECT(m_playbin), "video-changed", G_CALLBACK(handleStreamsChange), this);
+         g_signal_connect(G_OBJECT(m_playbin), "audio-changed", G_CALLBACK(handleStreamsChange), this);
+         g_signal_connect(G_OBJECT(m_playbin), "text-changed", G_CALLBACK(handleStreamsChange), this);
++
++#if defined(HAVE_GST_APPSRC)
++        g_signal_connect(G_OBJECT(m_playbin), "deep-notify::source", G_CALLBACK(configureAppSrcElement), this);
++#endif
+     }
+ }
+ 
+@@ -274,7 +278,7 @@ void QGstreamerPlayerSession::configureAppSrcElement(GObject* object, GObject *o
+     Q_UNUSED(object);
+     Q_UNUSED(pspec);
+ 
+-    if (self->appsrc()->isReady())
++    if (!self->appsrc())
+         return;
+ 
+     GstElement *appsrc;
+@@ -298,16 +302,14 @@ void QGstreamerPlayerSession::loadFromStream(const QNetworkRequest &request, QIO
+     m_lastPosition = 0;
+     m_isPlaylist = false;
+ 
+-    if (m_appSrc)
+-        m_appSrc->deleteLater();
+-    m_appSrc = new QGstAppSrc(this);
++    if (!m_appSrc)
++        m_appSrc = new QGstAppSrc(this);
+     m_appSrc->setStream(appSrcStream);
+ 
+     if (m_playbin) {
+         m_tags.clear();
+         emit tagsChanged();
+ 
+-        g_signal_connect(G_OBJECT(m_playbin), "deep-notify::source", (GCallback) &QGstreamerPlayerSession::configureAppSrcElement, (gpointer)this);
+         g_object_set(G_OBJECT(m_playbin), "uri", "appsrc://", NULL);
+ 
+         if (!m_streamTypes.isEmpty()) {
+@@ -330,6 +332,13 @@ void QGstreamerPlayerSession::loadFromUri(const QNetworkRequest &request)
+     m_lastPosition = 0;
+     m_isPlaylist = false;
+ 
++#if defined(HAVE_GST_APPSRC)
++    if (m_appSrc) {
++        m_appSrc->deleteLater();
++        m_appSrc = 0;
++    }
++#endif
++
+     if (m_playbin) {
+         m_tags.clear();
+         emit tagsChanged();
+-- 
+2.6.2.2.g1b5ffa3
+

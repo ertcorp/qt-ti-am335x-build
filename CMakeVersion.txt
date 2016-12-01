@@ -1,0 +1,12 @@
+set(BASE_NAME "qt")       # must be an unique string
+
+set(VERSION_MAJOR 5) 			# must be a integer number
+set(VERSION_MINOR 5) 			# must be a integer number
+set(VERSION_RELEASE 1) 			# must be a integer number
+set(VERSION_PATCHLEVEL 10) 		# must be a integer number
+set(SNAPSHOT "") 		# must be "-SNAPSHOT" or empty
+
+set(VERSION_MODE 4) 			# must be a integer number (3 or 4)
+set(VERSION_VARIANT "")
+set(PRODUCT_NAME_EXTENSION "")	# must be an string
+

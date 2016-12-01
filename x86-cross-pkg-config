@@ -1,0 +1,17 @@
+#!/bin/sh
+
+#Host pkg-config script to run on x86, targeting armv7a cross compile
+#Tested on pkg-config 0.23 (from arm-arago-linux TI)
+#Tested on pkg-config 0.25 (from arm-linux linaro)
+#Will not work on pkg-config 0.22 (from 10.04)
+export LINUX_DEVKIT=;;PATH;;
+export ROOTFS=;;PATH;;
+
+#unset this first then set libdir correctly
+export PKG_CONFIG_DIR=
+export PKG_CONFIG_LIBDIR=${LINUX_DEVKIT}/usr/lib/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=${LINUX_DEVKIT}
+#Below is needed for 0.25
+export PKG_CONFIG_PATH=${LINUX_DEVKIT}/usr/lib/pkgconfig
+pkg-config --define-variable=prefix=${LINUX_DEVKIT}/usr "$@"
+

@@ -1,0 +1,175 @@
+# Prerequisits:
+# 1. qt-everywhere-opensource-src-5.5.1.tar.gz downloaded into source folder
+#    e.g. from https://download.qt.io/official_releases/qt/5.5/5.5.1/single/qt-everywhere-opensource-src-5.5.1.tar.gz.mirrorlist
+# 2. Installed and ready TI SDK (ti-sdk-am335x-evm-07.00.00.00-Linux-x86-Install.bin) for am355x in version 07_00_00_00
+#    e.g. from http://software-dl.ti.com/sitara_linux/esd/AM335xSDK/07_00_00_00/index_FDS.html
+# 3. Environment variable TI_PSP need to be set and point to the install folder of the TI SDK
+#    e.g. export TI_PSP=/opt/ti-sdk-am335x-evm-07.00.00.00/
+# 4. folder $(TI_PSP)/custom-filesystem/opt/ must exist
+# 5. create a folder build-arm parallel to folder source
+# 6. run build command in folder that contains build-arm and source folder
+#
+# Call with:
+# sudo PATH="$PATH" TI_PSP="/opt/ti-sdk-am335x-evm-07.00.00.00/" make -f Makefile.arm -C source install_to_custom_filesystem QT_BUILD_PREFIX:=<YOUR_INSATLL_FOLDER>
+# E.g. sudo PATH="$PATH" TI_PSP="/opt/ti-sdk-am335x-evm-07.00.00.00/" make -f Makefile.arm -C source install_to_custom_filesystem QT_BUILD_PREFIX:=/home/builduser/project/qt/
+
+QT_BASENAME=qt-everywhere-opensource-src-5.5.1
+QT_TARBALL=$(QT_BASENAME).tar.gz
+
+
+
+
+
+BUILDDIR=../build-arm
+QT_BUILDDIR=$(BUILDDIR)/qt/
+
+
+ifdef BUILD_TOOLS
+    QT_FOLDER_NAME=$(shell $(BUILD_TOOLS)/getversion.pl ./CMakeVersion.txt)
+	ifeq ($(QT_FOLDER_NAME),)
+        QT_FOLDER_NAME=qt-Vy.y.y.y-SNAPSHOT
+    endif
+else
+    QT_FOLDER_NAME=qt-V5.5.1.0-SNAPSHOT
+endif
+
+QT_INSTALL_PATH=$(QT_BUILD_PREFIX)/$(QT_FOLDER_NAME)/arm/
+QT_LOCAL_INSTALL_PATH=/opt/$(QT_FOLDER_NAME)/arm/
+
+MKSPECS=linux-arm-gnueabi-ti-g++
+MKSPECS_DEST=$(QT_BUILDDIR)/$(QT_BASENAME)/qtbase/mkspecs
+
+PKGCONF=x86-cross-pkg-config
+PKGCONF_DEST=$(QT_BUILDDIR)/$(QT_BASENAME)/qtbase
+
+
+
+UNTGZ=tar -xzf
+
+LOG_FILE=$(BUILDDIR)/make-arm.log
+
+all:
+	@echo "-----------------------------------------------------------------"
+	@echo "- This make file is used to build the Qt library for arm"
+	@echo "-"
+	@echo "- To build and install run:"
+	@echo "- > make install"
+	@echo "-----------------------------------------------------------------"
+
+clean:
+	@rm -r -f $(QT_BUILDDIR)
+	@rm -r -f $(QT_LOCAL_INSTALL_PATH)
+	@rm -r -f $(QT_INSTALL_PATH)
+ 
+# extract Qt sources to build folder
+extract: $(QT_TARBALL) clean
+	@mkdir -p $(QT_BUILDDIR)
+	@echo "[QT_ARM] Extract Qt sources ..." | tee -a $(LOG_FILE)
+	@$(UNTGZ) $(QT_TARBALL) -C $(QT_BUILDDIR)
+	@echo "[QT_ARM] Qt sources extracted." | tee -a $(LOG_FILE)
+
+TARGET_SDK_FOLDER=$(TI_PSP)/linux-devkit/sysroots/cortexa8hf-vfp-neon-3.8-oe-linux-gnueabi/opt/qt/
+PKG_CONFIG_SYSROOT_DIR=$(TI_PSP)/linux-devkit/sysroots/cortexa8hf-vfp-neon-3.8-oe-linux-gnueabi
+PKG_CONFIG_LIBDIR=$(PKG_CONFIG_SYSROOT_DIR)/usr/lib/pkgconfig
+
+# ;;PATH;; -> /opt/ti-sdk-am335x-evm-07.00.00.00/linux-devkit/sysroots/cortexa8hf-vfp-neon-3.8-oe-linux-gnueabi
+
+# add config for target build of Qt
+qmakeconfig: extract
+	@echo "[QT_ARM] Copy make spec ..." | tee -a $(LOG_FILE)
+	@cp -rf $(MKSPECS) $(MKSPECS_DEST)
+	@cp -f $(PKGCONF) $(PKGCONF_DEST)
+	@chmod -R u+rw $(MKSPECS_DEST)/*
+	@chmod -R u+rw $(PKGCONF_DEST)/*
+	@cat $(MKSPECS)/qmake.conf | sed -e 's~;;PATH;;~$(PKG_CONFIG_SYSROOT_DIR)~g' > $(MKSPECS_DEST)/$(MKSPECS)/qmake.conf
+	@cat $(PKGCONF) | sed -e 's~;;PATH;;~$(PKG_CONFIG_SYSROOT_DIR)~g' > $(PKGCONF_DEST)/$(PKGCONF)
+	@echo "[QT_ARM] Make spec copied." | tee -a $(LOG_FILE)
+
+# Apply patch...
+apply_patch: qmakeconfig
+	@patch $(QT_BUILDDIR)/$(QT_BASENAME)/qtbase/mkspecs/features/create_cmake.prf patches/0001_create_cmake.prf.patch 
+	@cd $(QT_BUILDDIR)/$(QT_BASENAME) && patch -p1 < ../../../source/patches/0002_qeglfsintegration_setstyle.patch
+	@cd $(QT_BUILDDIR)/$(QT_BASENAME)/qtmultimedia && patch -p1 < ../../../../source/patches/0003_qtmultimedia.git-b4d03dc82f6d282582dda2137fadd54f97d3b9a7.patch
+
+
+
+
+
+# configure and compile Qt for target within target environment
+configure: apply_patch
+	@echo "[QT_ARM] Configure Qt ..." | tee -a $(LOG_FILE)
+	@export QMAKESPEC= && \
+	export PKG_CONFIG_SYSROOT_DIR=$(PKG_CONFIG_SYSROOT_DIR) && \
+	export PKG_CONFIG_DIR= && \
+	export PKG_CONFIG_LIBDIR=$(PKG_CONFIG_LIBDIR) && \
+	export PKG_CONFIG_PATH=$(PKG_CONFIG_LIBDIR) && \
+	export PKG_CONFIG=$(PKGCONF_DEST)/$(PKGCONF) && \
+	cd $(QT_BUILDDIR)/$(QT_BASENAME) && ./configure -prefix $(QT_LOCAL_INSTALL_PATH) -release -make libs -xplatform $(MKSPECS) -opengl es2 -no-gtkstyle -confirm-license -opensource -no-xcb -gstreamer -no-pch -no-dbus -qt-sql-sqlite -force-pkg-config -nomake examples -nomake tools -verbose >> ../../$(LOG_FILE) 2>&1    
+	@echo "[QT_ARM] Qt configured (see $(LOG_FILE) for further infos)." | tee -a $(LOG_FILE)
+
+compile: configure
+	@echo "[QT_ARM] Compile Qt ..." | tee -a $(LOG_FILE)
+	@export QMAKESPEC= && \
+	export PKG_CONFIG_SYSROOT_DIR=$(PKG_CONFIG_SYSROOT_DIR) && \
+	export PKG_CONFIG_DIR= && \
+	export PKG_CONFIG_LIBDIR=$(PKG_CONFIG_LIBDIR) && \
+	export PKG_CONFIG_PATH=$(PKG_CONFIG_LIBDIR) && \
+	export PKG_CONFIG=$(PKGCONF_DEST)/$(PKGCONF) && \
+	cd $(QT_BUILDDIR)/$(QT_BASENAME) && make -j8 >> ../../$(LOG_FILE) 2>&1
+	@echo "[QT_ARM] Qt compiled (see $(LOG_FILE) for further infos)." | tee -a $(LOG_FILE)
+
+# install Qt into target environment
+local_install: compile
+	@echo "[QT_ARM] Local install Qt ..." | tee -a $(LOG_FILE)
+	@make -C $(QT_BUILDDIR)/$(QT_BASENAME) install >> $(LOG_FILE) 2>&1
+	@echo "[QT_ARM] Qt installed locally (see $(LOG_FILE) for further infos)." | tee -a $(LOG_FILE)
+
+fonts: local_install
+
+
+
+
+
+
+
+# pack to tar.gz file
+pack: fonts
+
+
+
+
+# install to local drop folder
+install: pack
+
+
+
+
+
+install_to_sdk: install
+	@echo "[QT_ARM] Install to target SDK ..." | tee -a $(LOG_FILE)
+	@mkdir -p $(TARGET_SDK_FOLDER)
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/bin $(TARGET_SDK_FOLDER)/bin
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/imports $(TARGET_SDK_FOLDER)/imports
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/lib $(TARGET_SDK_FOLDER)/lib
+
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/include $(TARGET_SDK_FOLDER)/include
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/mkspecs $(TARGET_SDK_FOLDER)/mkspecs
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/plugins $(TARGET_SDK_FOLDER)/plugins
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/qml $(TARGET_SDK_FOLDER)/qml
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/translations $(TARGET_SDK_FOLDER)/translations
+	@echo "[QT_ARM] Install to target SDK done (check if git operation is required on SDK)." | tee -a $(LOG_FILE)
+
+TARGET_CUSTOM_FILESYSTEM_OPT=$(TI_PSP)/custom-filesystem/opt/
+
+install_to_custom_filesystem: install_to_sdk
+	@echo "[QT_ARM] Install to target custom filesystem ..." | tee -a $(LOG_FILE)
+	@mkdir -p $(TARGET_CUSTOM_FILESYSTEM_OPT)/qt
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/imports $(TARGET_CUSTOM_FILESYSTEM_OPT)/qt/imports
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/lib $(TARGET_CUSTOM_FILESYSTEM_OPT)/qt/lib
+
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/plugins $(TARGET_CUSTOM_FILESYSTEM_OPT)/qt/plugins
+	@cp -rp $(QT_LOCAL_INSTALL_PATH)/qml $(TARGET_CUSTOM_FILESYSTEM_OPT)/qt/qml
+	@rm -rf $(TARGET_CUSTOM_FILESYSTEM_OPT)/qt/lib/cmake
+	@echo "[QT_ARM] Install to target custom filesystem done (check if git operation is required on custom filesystem)." | tee -a $(LOG_FILE)
+
+.PHONY=extract qmakeconfig configure compile local_install strip_root pack install install_to_sdk install_to_custom_filesystem

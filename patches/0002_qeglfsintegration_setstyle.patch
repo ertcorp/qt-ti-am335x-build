@@ -1,0 +1,43 @@
+diff -ruN qt-everywhere-opensource-src-5.5.1_old/qtbase/src/plugins/platforms/eglfs/qeglfsintegration.cpp qt-everywhere-opensource-src-5.5.1/qtbase/src/plugins/platforms/eglfs/qeglfsintegration.cpp
+--- qt-everywhere-opensource-src-5.5.1_old/qtbase/src/plugins/platforms/eglfs/qeglfsintegration.cpp	2015-10-13 06:35:28.000000000 +0200
++++ qt-everywhere-opensource-src-5.5.1/qtbase/src/plugins/platforms/eglfs/qeglfsintegration.cpp	2016-03-14 12:50:14.639090709 +0100
+@@ -40,6 +40,7 @@
+ #include <QtGui/QScreen>
+ #include <QtGui/QOffscreenSurface>
+ #include <qpa/qplatformcursor.h>
++#include <qpa/qplatformtheme.h>
+ 
+ #include "qeglfsintegration.h"
+ #include "qeglfswindow.h"
+@@ -171,4 +172,19 @@
+     return chooser.chooseConfig();
+ }
+ 
++
++QVariant QEglFSIntegration::styleHint(QPlatformIntegration::StyleHint hint) const
++{
++    switch (hint) {
++    case QPlatformTheme::PasswordMaskDelay:
++        return QVariant(int(500));
++    case MousePressAndHoldInterval:
++        return QVariant(500);
++    case QPlatformTheme::WheelScrollLines:
++        return QVariant(1);
++    default:
++        return QPlatformIntegration::styleHint(hint);
++    }
++}
++
+ QT_END_NAMESPACE
+diff -ruN qt-everywhere-opensource-src-5.5.1_old/qtbase/src/plugins/platforms/eglfs/qeglfsintegration.h qt-everywhere-opensource-src-5.5.1/qtbase/src/plugins/platforms/eglfs/qeglfsintegration.h
+--- qt-everywhere-opensource-src-5.5.1_old/qtbase/src/plugins/platforms/eglfs/qeglfsintegration.h	2015-10-13 06:35:28.000000000 +0200
++++ qt-everywhere-opensource-src-5.5.1/qtbase/src/plugins/platforms/eglfs/qeglfsintegration.h	2016-03-14 12:50:35.121807760 +0100
+@@ -67,6 +67,8 @@
+                                                       QOffscreenSurface *surface) const Q_DECL_OVERRIDE;
+     EGLNativeDisplayType nativeDisplay() const Q_DECL_OVERRIDE;
+ 
++    QVariant styleHint(QPlatformIntegration::StyleHint hint) const Q_DECL_OVERRIDE;
++
+ private:
+     bool mDisableInputHandlers;
+ };
